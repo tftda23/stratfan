@@ -1,0 +1,19 @@
+[gd_scene load_steps=4 format=3 uid="uid://dp6t22y40x26h"]
+
+[ext_resource type="Script" path="res://scripts/citizen.gd" id="1_1a3i8"]
+[ext_resource type="Texture2D" path="res://icon.svg" id="2_cix5c"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_ewg3l"]
+size = Vector2(10, 10)
+
+[node name="Citizen" type="CharacterBody2D"]
+collision_layer = 4
+collision_mask = 3
+script = ExtResource("1_1a3i8")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+scale = Vector2(0.1, 0.1)
+texture = ExtResource("2_cix5c")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+shape = SubResource("RectangleShape2D_ewg3l")

@@ -1,0 +1,12 @@
+Please add the following UI elements to `godot_project/ui/world_gen_ui.tscn`. You can place them within a new `VBoxContainer` or `HBoxContainer` inside the existing `Panel` node.
+
+**Required Nodes (using these names):**
+*   `VBoxContainer` (or `HBoxContainer`) named `ResourceDisplay`.
+*   Inside `ResourceDisplay`, add `Label` nodes:
+    *   `FoodLabel`
+    *   `WoodLabel`
+    *   `WaterLabel`
+    *   `StoneLabel`
+    *   `MetalOreLabel`
+
+Once done, please confirm, and I will then modify the `world_gen_ui.gd` script to connect and update these labels.

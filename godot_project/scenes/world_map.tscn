@@ -1,0 +1,27 @@
+[gd_scene load_steps=3 format=3 uid="uid://b5w5g0j6qwbw8"]
+
+[ext_resource type="Script" path="res://scripts/world_map.gd" id="1_f5d6f"]
+[ext_resource type="PackedScene" uid="uid://c4tf01fy7yfm4" path="res://ui/world_gen_ui.tscn" id="2_c8x0j"]
+
+[node name="WorldMap" type="Node2D"]
+script = ExtResource("1_f5d6f")
+
+[node name="TileMap" type="TileMap" parent="."]
+format = 2
+
+[node name="CivOverlayMap" type="TileMap" parent="."]
+format = 2
+
+[node name="LandmarksMap" type="TileMap" parent="."]
+format = 2
+
+
+[node name="BorderLines" type="Line2D" parent="."]
+
+
+[node name="Camera2D" type="Camera2D" parent="."]
+zoom = Vector2(4, 4)
+
+[node name="CanvasLayer" type="CanvasLayer" parent="."]
+
+[node name="WorldGenUI" parent="CanvasLayer" instance=ExtResource("2_c8x0j")]

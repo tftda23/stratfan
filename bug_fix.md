@@ -1,0 +1,1 @@
+The `mini` function in `world_generator.gd` was a typo and has been corrected to `min`. This was a critical error that would have caused the game to crash during world generation. With this fix, the game should now run correctly.

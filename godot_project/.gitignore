@@ -1,0 +1,5 @@
+# Godot-specific ignores
+.godot/
+.godot/imported/
+*.translation
+export_presets.cfg
