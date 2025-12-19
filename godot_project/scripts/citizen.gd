@@ -3,7 +3,7 @@ extends CharacterBody2D
 class_name Citizen
 
 @export var civ_id: int = -1
-@export var speed: float = 50.0
+@export var speed: float = 100.0  # Doubled for better movement
 
 var current_tile_coords: Vector2i
 var target_tile_coords: Vector2i
@@ -12,17 +12,35 @@ var current_resource_target: Vector2i
 var current_resource_type: String
 var inventory: Dictionary = {}
 
+# Resource consumption
+var health: float = 100.0
+var max_health: float = 100.0
+var consumption_timer: float = 0.0
+var consumption_interval: float = 1.0  # Consume resources every 1 second during simulation
+var food_per_interval: float = 0.5  # Reduced rate: ~1 food per 2 simulation phases
+var water_per_interval: float = 0.25  # Reduced rate: ~0.5 water per 2 simulation phases
+var is_starving: bool = false
+
 enum State {
 	IDLE,
 	MOVING_TO_RESOURCE,
 	GATHERING,
 	MOVING_TO_CIV,
-	DEFENDING, # Future
-	ATTACKING, # Future
-	EXPANDING, # Future
+	DEFENDING,
+	ATTACKING,
+	EXPANDING,
+}
+
+enum Command {
+	GATHER_FOOD_WATER,    # Priority: food and water
+	GATHER_MATERIALS,      # Priority: wood, stone, metal
+	DEFEND,                # Stay near capital, attack enemies
+	SEEK_DESTROY,          # Hunt enemy units
+	EXPAND,                # Claim new territory
 }
 
 var current_state: State = State.IDLE
+var current_command: Command = Command.GATHER_FOOD_WATER  # Default command
 
 const CIV_COLORS = [
 	Color(1, 0, 0, 1.0), Color(0, 1, 0, 1.0), Color(0, 0, 1, 1.0),
@@ -37,6 +55,9 @@ func _ready():
 
 	# Create 4x4 pixel sprite
 	_create_pixel_sprite()
+
+	# Create HP bar
+	_create_hp_bar()
 
 	# Placeholder for initial state
 	current_state = State.IDLE
@@ -81,7 +102,40 @@ func _create_pixel_sprite():
 		sprite.scale = Vector2(2, 2)
 		add_child(sprite)
 
+func _create_hp_bar():
+	"""Create a health bar above the unit."""
+	var hp_bar_container = Node2D.new()
+	hp_bar_container.name = "HPBarContainer"
+	hp_bar_container.position = Vector2(0, -12)  # Above sprite
+	add_child(hp_bar_container)
+
+	# Background (red)
+	var bg = ColorRect.new()
+	bg.name = "HPBarBackground"
+	bg.size = Vector2(12, 2)
+	bg.position = Vector2(-6, 0)  # Center it
+	bg.color = Color(0.3, 0.0, 0.0, 0.8)
+	hp_bar_container.add_child(bg)
+
+	# Foreground (green)
+	var fg = ColorRect.new()
+	fg.name = "HPBarForeground"
+	fg.size = Vector2(12, 2)
+	fg.position = Vector2(-6, 0)
+	fg.color = Color(0.0, 0.8, 0.0, 0.9)
+	hp_bar_container.add_child(fg)
+
 func _physics_process(delta):
+	# Only process during simulation phase (turn-based)
+	if not GameManager.is_units_active():
+		return
+
+	# Handle resource consumption
+	_process_consumption(delta)
+
+	# Update sprite color based on health
+	_update_health_visual()
+
 	match current_state:
 		State.IDLE:
 			_idle_state()
@@ -153,7 +207,7 @@ func _move_state(delta):
 
 
 var gathering_timer: float = 0.0
-var gathering_duration: float = 3.0 # seconds per unit of resource
+var gathering_duration: float = 0.5 # Faster gathering: 0.5 seconds per unit (4 units per 2-second simulation)
 
 func _gathering_state(delta):
 	gathering_timer += delta
@@ -203,10 +257,19 @@ func _deposit_resources():
 	for res_type in inventory.keys():
 		var amount = inventory[res_type]
 		if amount > 0:
-			GameManager.add_player_resources(res_type, amount)
+			# Only add to player resources if this is a player citizen
+			if civ_id == GameManager.get_player_civ():
+				GameManager.add_player_resources(res_type, amount)
+				print("Citizen ", self.name, ": Deposited ", amount, " ", res_type, " to player. Remaining inventory: ", inventory)
+			else:
+				print("Citizen ", self.name, " (AI Civ %d): Deposited ", amount, " ", res_type, " to AI storage.")
 			inventory[res_type] = 0 # Clear inventory for this resource
-			print("Citizen ", self.name, ": Deposited ", amount, " ", res_type, ". Remaining inventory: ", inventory)
 
+
+func set_command(new_command: Command):
+	"""Set the citizen's command."""
+	current_command = new_command
+	current_state = State.IDLE  # Reset state to pick up new command
 
 func find_nearest_resource() -> Dictionary:
 	var world_data = WorldManager.world_map_node.get_world_data()
@@ -214,6 +277,16 @@ func find_nearest_resource() -> Dictionary:
 	if not civ_capital_coords:
 		return {}
 
+	# Filter resources based on command
+	var target_resources = []
+	match current_command:
+		Command.GATHER_FOOD_WATER:
+			target_resources = ["food", "water"]
+		Command.GATHER_MATERIALS:
+			target_resources = ["wood", "stone", "metal_ore"]
+		_:
+			# For other commands, gather any resource
+			target_resources = ["food", "water", "wood", "stone", "metal_ore"]
 
 	var search_radius = 50 # tiles
 	var nearest_resource_coords: Vector2i = Vector2i.ZERO
@@ -228,7 +301,8 @@ func find_nearest_resource() -> Dictionary:
 				var tile = world_data[coords]
 				if tile.has("resources") and not tile["resources"].is_empty():
 					for res_type in tile["resources"].keys():
-						if tile["resources"][res_type]["amount"] > 0:
+						# Filter by command's target resources
+						if res_type in target_resources and tile["resources"][res_type]["amount"] > 0:
 							var distance_sq = float(coords.x - current_tile_coords.x) * (coords.x - current_tile_coords.x) + \
 											  float(coords.y - current_tile_coords.y) * (coords.y - current_tile_coords.y)
 							if distance_sq < min_distance_sq:
@@ -238,5 +312,135 @@ func find_nearest_resource() -> Dictionary:
 	
 	if nearest_resource_coords != Vector2i.ZERO:
 		return {"coords": nearest_resource_coords, "resource_type": nearest_resource_type}
-	
+
 	return {}
+
+func _process_consumption(delta):
+	"""Handle resource consumption and starvation."""
+	consumption_timer += delta
+
+	if consumption_timer >= consumption_interval:
+		consumption_timer = 0.0
+		_consume_resources()
+
+func _consume_resources():
+	"""Consume food and water from civilization's stockpile."""
+	# Only consume if this is the player's citizen (for now, can expand to all civs later)
+	if civ_id != GameManager.player_civ_id:
+		return
+
+	var player_resources = GameManager.get_player_resources()
+	var food_available = player_resources.get("food", 0)
+	var water_available = player_resources.get("water", 0)
+
+	var food_consumed = 0
+	var water_consumed = 0
+
+	# Try to consume food
+	if food_available >= food_per_interval:
+		food_consumed = food_per_interval
+		GameManager.add_player_resources("food", -int(food_per_interval))
+	else:
+		food_consumed = food_available
+		if food_available > 0:
+			GameManager.add_player_resources("food", -food_available)
+
+	# Try to consume water
+	if water_available >= water_per_interval:
+		water_consumed = water_per_interval
+		GameManager.add_player_resources("water", -int(water_per_interval))
+	else:
+		water_consumed = water_available
+		if water_available > 0:
+			GameManager.add_player_resources("water", -water_available)
+
+	# Calculate starvation damage
+	var food_deficit = food_per_interval - food_consumed
+	var water_deficit = water_per_interval - water_consumed
+
+	if food_deficit > 0 or water_deficit > 0:
+		is_starving = true
+		# Lose health based on deficit
+		var damage = (food_deficit * 5.0) + (water_deficit * 7.0)
+		health -= damage
+		Log.log_warning("Citizen %s: Starving! Health: %.1f" % [name, health])
+
+		if health <= 0:
+			_die()
+	else:
+		is_starving = false
+		# Slowly regenerate health when well-fed
+		if health < max_health:
+			health = min(health + 5.0, max_health)
+
+func _die():
+	"""Citizen dies from starvation."""
+	Log.log_info("Citizen %s: Died from starvation!" % name)
+
+	# Update GameManager citizen count
+	GameManager.remove_citizen_from_civ(civ_id)
+
+	# Create death effect
+	_create_death_effect()
+
+	# Remove from scene
+	queue_free()
+
+func _create_death_effect():
+	"""Create a visual death effect."""
+	var effect = ColorRect.new()
+	effect.color = Color(0.5, 0.5, 0.5, 0.8)
+	effect.size = Vector2(8, 8)
+	effect.position = global_position - Vector2(4, 4)
+
+	if get_parent():
+		get_parent().add_child(effect)
+
+		# Fade out effect
+		var tween = create_tween()
+		tween.tween_property(effect, "modulate:a", 0.0, 1.0)
+		tween.tween_callback(effect.queue_free)
+
+func _update_health_visual():
+	"""Update citizen sprite color and HP bar based on health."""
+	var sprite = get_node_or_null("Sprite2D")
+	if not sprite:
+		return
+
+	# Update HP bar
+	var hp_bar_container = get_node_or_null("HPBarContainer")
+	if hp_bar_container:
+		var fg = hp_bar_container.get_node_or_null("HPBarForeground")
+		if fg:
+			# Update HP bar width based on health percentage
+			var hp_percent = health / max_health
+			fg.size.x = 12 * hp_percent
+
+			# Change color based on health
+			if hp_percent > 0.6:
+				fg.color = Color(0.0, 0.8, 0.0, 0.9)  # Green
+			elif hp_percent > 0.3:
+				fg.color = Color(0.9, 0.9, 0.0, 0.9)  # Yellow
+			else:
+				fg.color = Color(0.9, 0.0, 0.0, 0.9)  # Red
+
+	# Interpolate from normal color to red as health decreases
+	var health_percent = health / max_health
+	var civ_color = CIV_COLORS[civ_id % CIV_COLORS.size()]
+
+	if health_percent < 0.5:
+		# Blend with red when low health
+		var red_blend = (0.5 - health_percent) * 2.0  # 0 to 1
+		sprite.modulate = civ_color.lerp(Color(1, 0, 0, 1), red_blend)
+	else:
+		sprite.modulate = civ_color
+
+	# Blink when starving
+	if is_starving:
+		var blink_phase = fmod(Time.get_ticks_msec() / 500.0, 1.0)
+		if blink_phase < 0.5:
+			sprite.modulate.a = 0.5
+
+func get_current_tile_coords() -> Vector2i:
+	"""Get the current tile coordinates of this citizen."""
+	return current_tile_coords

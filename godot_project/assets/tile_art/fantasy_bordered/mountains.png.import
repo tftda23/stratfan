@@ -2,7 +2,7 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://8b2eqyppdcoc"
+uid="uid://c6qcxq8ee1r7y"
 path="res://.godot/imported/mountains.png-f9ea68b588f24e37362c8c6c5998ff0b.ctex"
 metadata={
 "vram_texture": false
@@ -37,4 +37,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0

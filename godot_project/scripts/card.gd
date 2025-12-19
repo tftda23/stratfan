@@ -7,6 +7,16 @@ class_name Card
 @export var mana_cost: int = 1
 @export var card_type: String = "action"  # action, boon, bane, summon, terrain
 
+# Card rarity
+enum Rarity {
+	COMMON,     # Gray
+	UNCOMMON,   # Green
+	RARE,       # Blue
+	EPIC,       # Purple
+	LEGENDARY   # Gold
+}
+@export var rarity: Rarity = Rarity.COMMON
+
 # Card effect data
 @export var effect_type: String = "none"  # terrain_change, resource_boost, destroy, freeze, etc.
 @export var effect_power: int = 1
@@ -26,8 +36,31 @@ func get_display_text() -> String:
 	text += "%s" % card_description
 	return text
 
+func get_rarity_color() -> Color:
+	"""Get the border color for this card's rarity."""
+	match rarity:
+		Rarity.COMMON:
+			return Color(0.6, 0.6, 0.6)  # Gray
+		Rarity.UNCOMMON:
+			return Color(0.3, 0.9, 0.3)  # Green
+		Rarity.RARE:
+			return Color(0.3, 0.6, 1.0)  # Blue
+		Rarity.EPIC:
+			return Color(0.7, 0.3, 0.9)  # Purple
+		Rarity.LEGENDARY:
+			return Color(1.0, 0.8, 0.2)  # Gold
+	return Color.WHITE
+
+func get_rarity_name() -> String:
+	"""Get the rarity name as a string."""
+	return Rarity.keys()[rarity]
+
 func apply_effect(world_map, target_coords: Vector2i) -> bool:
 	"""Apply this card's effect to the target location."""
+	# Create visual effect at target position
+	var world_pos = world_map.tile_map.map_to_local(target_coords)
+	CardVisualEffects.create_effect_at_position(effect_type, world_pos, world_map)
+
 	match effect_type:
 		"terrain_change":
 			return _apply_terrain_change(world_map, target_coords)
@@ -45,6 +78,24 @@ func apply_effect(world_map, target_coords: Vector2i) -> bool:
 			return _apply_bane(world_map, target_coords)
 		"summon_citizens":
 			return _apply_summon_citizens(world_map, target_coords)
+		"summon_warriors":
+			return _apply_summon_warriors(world_map, target_coords)
+		"add_stockpile":
+			return _apply_add_stockpile(world_map, target_coords)
+		"damage_units":
+			return _apply_damage_units(world_map, target_coords)
+		"damage_buildings":
+			return _apply_damage_buildings(world_map, target_coords)
+		"damage_all":
+			return _apply_damage_all(world_map, target_coords)
+		"damage_single":
+			return _apply_damage_single(world_map, target_coords)
+		"heal_units":
+			return _apply_heal_units(world_map, target_coords)
+		"heal_buildings":
+			return _apply_heal_buildings(world_map, target_coords)
+		"destroy_resource":
+			return _apply_destroy_resource(world_map, target_coords)
 	return false
 
 func get_affected_tiles(world_map, target_coords: Vector2i) -> Array[Vector2i]:
@@ -207,8 +258,136 @@ func _apply_bane(world_map, target_coords: Vector2i) -> bool:
 func _apply_summon_citizens(world_map, target_coords: Vector2i) -> bool:
 	"""Summon new citizens at target location."""
 	var num_citizens = effect_power
+	var tiles = get_affected_tiles(world_map, target_coords)
+
+	if tiles.is_empty():
+		tiles = [target_coords]
 
 	for i in range(num_citizens):
-		world_map._spawn_single_citizen(target_coords, GameManager.player_civ_id)
+		var spawn_tile = tiles[i % tiles.size()]
+		world_map._spawn_single_citizen(spawn_tile, GameManager.player_civ_id)
 
+	return true
+
+func _apply_summon_warriors(world_map, target_coords: Vector2i) -> bool:
+	"""Summon warrior units at target location."""
+	var num_warriors = effect_power
+	var tiles = get_affected_tiles(world_map, target_coords)
+
+	if tiles.is_empty():
+		tiles = [target_coords]
+
+	# Load warrior script
+	var WarriorScript = load("res://scripts/warrior.gd")
+
+	for i in range(num_warriors):
+		var spawn_tile = tiles[i % tiles.size()]
+		var warrior = CharacterBody2D.new()
+		warrior.set_script(WarriorScript)
+		warrior.civ_id = GameManager.player_civ_id
+		world_map.add_child(warrior)
+		warrior.set_current_tile_coords(spawn_tile)
+		Log.log_info("Card: Summoned warrior at %s" % spawn_tile)
+
+	return true
+
+func _apply_add_stockpile(world_map, target_coords: Vector2i) -> bool:
+	"""Add resources directly to player stockpile."""
+	var resource_type = effect_data.get("resource_type", "food")
+	var amount = effect_power
+
+	GameManager.add_player_resources(resource_type, amount)
+	Log.log_info("Card: Added %d %s to player stockpile" % [amount, resource_type])
+	NotificationManager.notify_success("+%d %s" % [amount, resource_type.capitalize()])
+
+	return true
+
+func _apply_damage_units(world_map, target_coords: Vector2i) -> bool:
+	"""Deal damage to units in area."""
+	var tiles = get_affected_tiles(world_map, target_coords)
+	if tiles.is_empty() and target_type == "global":
+		# Global targeting - damage all enemy units
+		for child in world_map.get_children():
+			if child.is_in_group("citizens") and child.civ_id != GameManager.player_civ_id:
+				child.health -= effect_power
+				if child.health <= 0:
+					child.queue_free()
+		return true
+
+	var damaged = 0
+	for tile in tiles:
+		for child in world_map.get_children():
+			if child.is_in_group("citizens"):
+				if child.current_tile_coords == tile and child.civ_id != GameManager.player_civ_id:
+					child.health -= effect_power
+					damaged += 1
+					if child.health <= 0:
+						child.queue_free()
+
+	Log.log_info("Card: Damaged %d units" % damaged)
+	return true
+
+func _apply_damage_buildings(world_map, target_coords: Vector2i) -> bool:
+	"""Deal damage to buildings in area."""
+	# Buildings not implemented yet - placeholder
+	Log.log_info("Card: Damage buildings (not yet implemented)")
+	return true
+
+func _apply_damage_all(world_map, target_coords: Vector2i) -> bool:
+	"""Deal damage to both units and buildings."""
+	_apply_damage_units(world_map, target_coords)
+	_apply_damage_buildings(world_map, target_coords)
+	return true
+
+func _apply_damage_single(world_map, target_coords: Vector2i) -> bool:
+	"""Deal damage to single unit or building at target."""
+	for child in world_map.get_children():
+		if child.is_in_group("citizens"):
+			if child.current_tile_coords == target_coords:
+				child.health -= effect_power
+				if child.health <= 0:
+					child.queue_free()
+				return true
+	return true
+
+func _apply_heal_units(world_map, target_coords: Vector2i) -> bool:
+	"""Restore HP to units."""
+	var tiles = get_affected_tiles(world_map, target_coords)
+
+	if tiles.is_empty() and target_type == "global":
+		# Global targeting - heal all player units
+		for child in world_map.get_children():
+			if child.is_in_group("citizens") and child.civ_id == GameManager.player_civ_id:
+				child.health = min(child.max_health, child.health + effect_power)
+		return true
+
+	var healed = 0
+	for tile in tiles:
+		for child in world_map.get_children():
+			if child.is_in_group("citizens"):
+				if child.current_tile_coords == tile and child.civ_id == GameManager.player_civ_id:
+					child.health = min(child.max_health, child.health + effect_power)
+					healed += 1
+
+	Log.log_info("Card: Healed %d units" % healed)
+	return true
+
+func _apply_heal_buildings(world_map, target_coords: Vector2i) -> bool:
+	"""Restore HP to buildings."""
+	# Buildings not implemented yet - placeholder
+	Log.log_info("Card: Heal buildings (not yet implemented)")
+	return true
+
+func _apply_destroy_resource(world_map, target_coords: Vector2i) -> bool:
+	"""Destroy specific resource type in area."""
+	var resource_type = effect_data.get("resource_type", "food")
+	var tiles = get_affected_tiles(world_map, target_coords)
+
+	for tile in tiles:
+		if world_map._tile_data.has(tile):
+			var tile_data = world_map._tile_data[tile]
+			if tile_data.has("resources") and tile_data.resources.has(resource_type):
+				tile_data.resources[resource_type]["amount"] = 0
+
+	Log.log_info("Card: Destroyed %s in %d tiles" % [resource_type, tiles.size()])
 	return true

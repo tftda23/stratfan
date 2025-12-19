@@ -6,8 +6,8 @@ extends Node2D
 @onready var world_gen_ui = $CanvasLayer/WorldGenUI
 @onready var camera = $Camera2D
 
-@export var width = 1000
-@export var height = 1000
+@export var width = 300
+@export var height = 300
 @export var world_seed = 0
 
 var generator: WorldGenerator = null # Keep a reference to the generator
@@ -30,6 +30,7 @@ const EDGE_SCROLL_MARGIN = 50
 const EDGE_SCROLL_SPEED = 300
 
 var last_hovered_tile: Vector2i = Vector2i(-9999, -9999) # Track last hovered tile
+var hover_highlight: Polygon2D = null # Visual highlight for hovered tile
 
 # Card targeting
 var is_targeting_card: bool = false
@@ -169,10 +170,10 @@ func _create_terrain_tileset():
 			tile_size = Vector2i(16, 16)
 		TilesetStyle.FANTASY_BORDERED:
 			tile_art_path = "res://assets/tile_art/fantasy_bordered/"
-			tile_size = Vector2i(32, 32)
+			tile_size = Vector2i(16, 16)
 		TilesetStyle.FANTASY_BORDERLESS:
 			tile_art_path = "res://assets/tile_art/fantasy_borderless/"
-			tile_size = Vector2i(32, 32)
+			tile_size = Vector2i(16, 16)
 
 	tile_set.tile_size = tile_size
 	Log.log_info("world_map.gd: Using tileset style %d with path: %s" % [current_tileset_style, tile_art_path])
@@ -344,29 +345,54 @@ func generate_world(): # Removed terrain_tile_source_ids parameter
 	
 	_calculate_world_boundaries()
 	Log.log_info("world_map.gd: World boundaries calculated.")
+
+	# Start the victory manager
+	VictoryManager.start_game()
+
+	# Create AI opponents
+	AIManager.create_ai_opponents(_civ_territories, GameManager.player_civ_id)
+
+	# Initialize minimap if it exists
+	if world_gen_ui and world_gen_ui.has_method("initialize_minimap"):
+		world_gen_ui.call_deferred("initialize_minimap")
+
 	Log.log_info("world_map.gd: generate_world() finished.")
 
-# Preload Citizen scene
+# Preload Citizen and Warrior scenes
 const CITIZEN_SCENE = preload("res://scenes/citizen.tscn")
+const WARRIOR_SCRIPT = preload("res://scripts/warrior.gd")
 
 func _spawn_citizens():
 	# Clear existing citizens if regenerating world
 	for child in get_children():
 		if child.is_in_group("citizens"):
 			child.queue_free()
-	
+
 	for civ_id in _civ_capitals.keys():
 		var capital_coords = _civ_capitals[civ_id]
-		var num_citizens_to_spawn = 3 # Example: spawn 3 citizens per civ
-		
-		for i in range(num_citizens_to_spawn):
+		var num_workers_to_spawn = 8  # Increased from 3 to 8 workers
+		var num_warriors_to_spawn = 3  # Spawn 3 warriors per civ
+
+		# Spawn workers
+		for i in range(num_workers_to_spawn):
 			var citizen = CITIZEN_SCENE.instantiate()
 			citizen.civ_id = civ_id
 			add_child(citizen)
-			GameManager.add_citizen_to_civ(civ_id) # Register citizen with GameManager
+			GameManager.add_citizen_to_civ(civ_id)
 			citizen.set_current_tile_coords(capital_coords)
-			citizen.name = "Citizen_Civ%d_%d" % [civ_id, i]
-			Log.log_info("Spawned Citizen %s for Civ %d at %s." % [citizen.name, civ_id, capital_coords])
+			citizen.name = "Worker_Civ%d_%d" % [civ_id, i]
+			Log.log_info("Spawned Worker %s for Civ %d at %s." % [citizen.name, civ_id, capital_coords])
+
+		# Spawn warriors
+		for i in range(num_warriors_to_spawn):
+			var warrior = CharacterBody2D.new()
+			warrior.set_script(WARRIOR_SCRIPT)
+			warrior.civ_id = civ_id
+			add_child(warrior)
+			GameManager.add_citizen_to_civ(civ_id)  # Warriors count as citizens too
+			warrior.set_current_tile_coords(capital_coords)
+			warrior.name = "Warrior_Civ%d_%d" % [civ_id, i]
+			Log.log_info("Spawned Warrior %s for Civ %d at %s." % [warrior.name, civ_id, capital_coords])
 
 
 func _calculate_world_boundaries():
@@ -504,35 +530,44 @@ func _process(delta):
 	else:
 		camera.position.y = clamp(camera.position.y, min_y_clamp, max_y_clamp)
 
-	# Update hover info based on mouse position
-	_update_hover_info()
+	# Update hover info based on mouse position (only if mouse is over viewport)
+	var viewport_rect = get_viewport_rect()
+	if viewport_rect.has_point(mouse_pos):
+		_update_hover_info()
 
 
 func _input(event):
 	# Mouse Wheel Zoom
 	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_WHEEL_UP: camera.zoom /= 1.2
-		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN: camera.zoom *= 1.2
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			camera.zoom *= 1.1
+		if event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			camera.zoom /= 1.1
 		# Middle mouse button panning start/stop
-		if event.button_index == MOUSE_BUTTON_MIDDLE: is_panning = event.is_pressed()
-	
-	# Trackpad Pinch Zoom
+		if event.button_index == MOUSE_BUTTON_MIDDLE:
+			is_panning = event.is_pressed()
+
+	# Trackpad Pinch Zoom (Mac)
 	if event is InputEventMagnifyGesture:
-		camera.zoom /= event.factor
+		var zoom_factor = event.factor
+		camera.zoom *= zoom_factor
+
+	# Trackpad Two-Finger Pan (Mac)
+	if event is InputEventPanGesture:
+		# Pan gesture delta is in screen space, convert to world space
+		var pan_delta = event.delta * 8.0  # Multiplier for sensitivity
+		camera.position -= pan_delta / camera.zoom  # Reversed for natural scrolling
 
 	# Clamp zoom level
 	camera.zoom = camera.zoom.clamp(_min_zoom, _max_zoom)
-	
-	# Mouse drag panning
+
+	# Mouse drag panning (middle mouse button)
 	if event is InputEventMouseMotion and is_panning:
 		camera.position -= event.relative / camera.zoom
 
 func _update_hover_info():
-	# Get mouse position in viewport
-	var mouse_pos = get_viewport().get_mouse_position()
-
-	# Convert to world coordinates (accounting for camera)
-	var world_pos = camera.get_global_transform_with_canvas().affine_inverse() * mouse_pos
+	# Get mouse position in world coordinates (properly handles camera transform)
+	var world_pos = tile_map.get_global_mouse_position()
 
 	# Convert world position to tile coordinates
 	var tile_coords = tile_map.local_to_map(world_pos)
@@ -545,12 +580,15 @@ func _update_hover_info():
 		if _tile_data.has(tile_coords):
 			var tile_data = _tile_data[tile_coords]
 			world_gen_ui.update_hover_info(tile_data, tile_coords)
+			_update_hover_highlight(tile_coords)
 		else:
 			# Mouse is outside the valid tile area
 			world_gen_ui.hide_hover_info()
+			_hide_hover_highlight()
 	elif not _tile_data.has(tile_coords):
 		# Make sure to hide if we're still outside valid tiles
 		world_gen_ui.hide_hover_info()
+		_hide_hover_highlight()
 
 	# Update card targeting preview
 	if is_targeting_card and targeting_card:
@@ -560,6 +598,9 @@ func start_card_targeting(card: Card):
 	"""Start targeting mode for playing a card."""
 	is_targeting_card = true
 	targeting_card = card
+	# Update hover highlight to show target validity colors
+	if hover_highlight and hover_highlight.visible:
+		_update_hover_highlight(last_hovered_tile)
 	Log.log_info("WorldMap: Started targeting for card '%s'" % card.card_name)
 
 func cancel_card_targeting():
@@ -568,6 +609,9 @@ func cancel_card_targeting():
 	targeting_card = null
 	target_preview_tiles.clear()
 	_clear_target_preview()
+	# Update hover highlight back to normal colors
+	if hover_highlight and hover_highlight.visible:
+		_update_hover_highlight(last_hovered_tile)
 	Log.log_info("WorldMap: Cancelled card targeting")
 
 func _update_target_preview(tile_coords: Vector2i):
@@ -578,30 +622,111 @@ func _update_target_preview(tile_coords: Vector2i):
 	# Get affected tiles
 	var affected = targeting_card.get_affected_tiles(self, tile_coords)
 
+	# Only update if tiles changed
+	if affected == target_preview_tiles:
+		return
+
 	# Clear old preview
 	_clear_target_preview()
 
 	# Store new preview tiles
 	target_preview_tiles = affected
 
-	# Visual feedback would go here (could highlight tiles, change colors, etc.)
-	# For now just log
-	if not affected.is_empty() and affected != target_preview_tiles:
+	# Show area highlight
+	if not affected.is_empty():
+		# Color based on card type
+		var highlight_color = Color(1, 1, 0, 0.3)  # Default yellow
+		if targeting_card.card_type == "bane":
+			highlight_color = Color(1, 0, 0, 0.3)  # Red for destructive
+		elif targeting_card.card_type == "boon":
+			highlight_color = Color(0, 1, 0, 0.3)  # Green for beneficial
+		elif targeting_card.card_type == "terrain":
+			highlight_color = Color(0.6, 0.5, 0.3, 0.3)  # Brown for terrain
+
+		CardVisualEffects.create_area_effect_highlight(affected, self, highlight_color)
 		Log.log_info("WorldMap: Targeting %d tiles" % affected.size())
 
 func _clear_target_preview():
 	"""Clear target preview visuals."""
-	# Would remove highlights here
-	pass
+	CardVisualEffects._clear_highlights(self)
+
+func _create_hover_highlight() -> Polygon2D:
+	"""Create the hover highlight polygon."""
+	var highlight = Polygon2D.new()
+	highlight.name = "HoverHighlight"
+	highlight.z_index = 5
+
+	# Create hexagon vertices based on current tileset size
+	var tile_size = tile_map.tile_set.tile_size
+	var size = 8.0  # Match the exact hex size from tile generation
+	var vertices = PackedVector2Array()
+	for i in range(6):
+		var angle = (TAU / 6.0) * i  # Start at 0 degrees for flat-top hex (no offset)
+		vertices.append(Vector2(cos(angle), sin(angle)) * size)
+
+	highlight.polygon = vertices
+	highlight.color = Color(1, 1, 1, 0.3)  # White semi-transparent
+
+	add_child(highlight)
+
+	# Add pulsing animation (bound to highlight lifetime)
+	var tween = highlight.create_tween()
+	tween.set_loops()
+	tween.tween_property(highlight, "modulate:a", 0.6, 0.6)
+	tween.tween_property(highlight, "modulate:a", 1.0, 0.6)
+
+	return highlight
+
+func _update_hover_highlight(tile_coords: Vector2i):
+	"""Update or create hover highlight at the given tile."""
+	if not _tile_data.has(tile_coords):
+		_hide_hover_highlight()
+		return
+
+	# Create highlight if it doesn't exist
+	if not hover_highlight:
+		hover_highlight = _create_hover_highlight()
+
+	# Position at the tile
+	var tile_pos = tile_map.map_to_local(tile_coords)
+	hover_highlight.position = tile_pos
+	hover_highlight.visible = true
+
+	# Change color based on what's on the tile
+	var tile_data = _tile_data[tile_coords]
+	var civ_id = tile_data.get("civ_id", -1)
+
+	if is_targeting_card and targeting_card:
+		# Show target validity during card targeting
+		var can_target = _can_target_tile(tile_coords)
+		if can_target:
+			hover_highlight.color = Color(0, 1, 0, 0.4)  # Green for valid
+		else:
+			hover_highlight.color = Color(1, 0, 0, 0.4)  # Red for invalid
+	elif civ_id == GameManager.player_civ_id:
+		hover_highlight.color = Color(0, 1, 1, 0.3)  # Cyan for player territory
+	elif civ_id >= 0:
+		hover_highlight.color = Color(1, 0.5, 0, 0.3)  # Orange for other civs
+	else:
+		hover_highlight.color = Color(1, 1, 1, 0.3)  # White for neutral
+
+func _hide_hover_highlight():
+	"""Hide the hover highlight."""
+	if hover_highlight:
+		hover_highlight.visible = false
+
+func _can_target_tile(tile_coords: Vector2i) -> bool:
+	"""Check if a tile can be targeted with the current card."""
+	# Basic check - could be expanded with card-specific logic
+	return _tile_data.has(tile_coords)
 
 func _unhandled_input(event: InputEvent):
 	"""Handle card playing clicks."""
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			if is_targeting_card and targeting_card:
-				# Get clicked tile
-				var mouse_pos = get_viewport().get_mouse_position()
-				var world_pos = camera.get_global_transform_with_canvas().affine_inverse() * mouse_pos
+				# Get clicked tile (properly handles camera transform)
+				var world_pos = tile_map.get_global_mouse_position()
 				var tile_coords = tile_map.local_to_map(world_pos)
 
 				if _tile_data.has(tile_coords):

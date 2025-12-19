@@ -2,7 +2,7 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://d0nnlsqai4v6m"
+uid="uid://bp6aa0iaedmsc"
 path="res://.godot/imported/jungle.png-ed6a33f811e9fd0b90d233db6d1aae7b.ctex"
 metadata={
 "vram_texture": false
@@ -37,4 +37,4 @@ process/normal_map_invert_y=false
 process/hdr_as_srgb=false
 process/hdr_clamp_exposure=false
 process/size_limit=0
-detect_3d/compress_to=1
+detect_3d/compress_to=0
